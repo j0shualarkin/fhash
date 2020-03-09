@@ -1,14 +1,14 @@
-(*  Joshua Larkin 
+(*  Joshua Larkin
     Interp.fs
-    Small interpreter like those discussed in 
+    Small interpreter like those discussed in
       "Essentials of Programming Languages"
-         by Dan Friedman and Mitch Wand 
-         
+         by Dan Friedman and Mitch Wand
+
     Note: some defintions are followed by the "and" keyword
     this is how mutual recursion is done in F#
-    
-    I allow the `ef` (aka `if`) expression to take any value as predicate,
-    with the number 0 and false being the only ``false`` values.
+
+    I allow the `ef` expression to take any value as predicate,
+    with the number 0 and boolean false being the only ``false`` values.
     I.e., closures and nonzero numbers are effectively ``true`` values.
     This behavior is like that of the Racket programming language.
 *)
@@ -18,23 +18,24 @@ exception Oops of string
 
 
 (* the target language of our interpreter *)
-type Expr = 
+type Expr =
     | Number  of int
     | Var     of string
     | Boolean of bool
     | Lambda  of string * Expr
     | App     of Expr * Expr
     | Ef      of Expr * Expr * Expr
-    | Sub1    of Expr 
-    | Mult    of Expr * Expr 
+    | Sub1    of Expr
+    | Mult    of Expr * Expr
     | Zero    of Expr
-    
+    | Let     of string * Expr * Expr
+
 (* Data-structural environments *)
-type Env = Map<string,Val> 
-and Val =  
+type Env = Map<string,Val>
+and Val =
     | Numval  of int
     | Boolval of bool
-    | Closure of string * Expr * Env  
+    | Closure of string * Expr * Env
 
 let empty_env = Map.empty
 
@@ -54,36 +55,38 @@ let rec valof (env:Env) (exp:Expr) =
     | Lambda (x, b)     -> Closure(x,b,env)
     | App (rator, rand) -> apply_closure (valof env rator) (valof env rand)
     | Ef (p, t, f)      -> eval_ef (valof env p) t f env
-    | Sub1 n            -> eval_s1 (valof env n) 
+    | Sub1 n            -> eval_s1 (valof env n)
     | Mult (m, n)       -> eval_mult (valof env m) (valof env n)
     | Zero (n)          -> eval_zero (valof env n)
-    
+    | Let (x,e,b)       -> valof (update_env env x (valof env e)) b
+
 and apply_closure (f:Val) a =
-    match f with 
+    match f with
     | Closure (x, b, env) -> valof (update_env env x a) b
     | _ -> raise (Oops("apply closure not given a closure as operator"))
-    
+
 and eval_ef p t f env =
     let q = match p with
-            | Boolval b -> b      
+            | Boolval b -> b
             | Numval n  -> n <> 0
             | _         -> true   (*closures are true values*)
-    if q then (valof env t) else (valof env f) 
-    
-and eval_s1 n = 
-    match n with 
+    if q then (valof env t) else (valof env f)
+
+and eval_s1 n =
+    match n with
     | Numval n -> Numval (n - 1)
     | _ -> raise (Oops("sub1 was not given a number"))
-    
+
 and eval_mult m n =
     match (m, n) with
     | Numval m, Numval n -> Numval (m * n)
     | _,_ -> raise (Oops("multiplication of two numbers"))
-    
-and eval_zero n = 
+
+and eval_zero n =
     match n with
     | Numval n -> Boolval (n = 0)
     | _ -> raise (Oops("zero? not given a number"))
+
 
 (* end of function: valof *)
 
@@ -97,20 +100,31 @@ let run_val (r:Val) =
 let eval (e:Expr) =
     run_val (valof empty_env e)
 
-let show (e:Expr) = 
-    printf "result is %s" (eval e)
+let show (e:Expr) =
+    printf "result is %s\n" (eval e)
 
 (* Some examples *)
 
-let fact_5 = 
+let fact_5 =
     App(
-        App(Lambda("f", 
-                Lambda("n", 
+        App(Lambda("f",
+                Lambda("n",
                     Ef(Zero(Var "n"), Number 1, Mult(Var "n", App(App(Var "f", Var "f"), Sub1(Var "n"))))
-                    )), 
-            Lambda("f", 
-                Lambda("n", 
+                    )),
+            Lambda("f",
+                Lambda("n",
                     Ef(Zero(Var "n"), Number 1, Mult(Var "n", App(App(Var "f", Var "f"), Sub1(Var "n"))))))),
         Number 5)
 
 show fact_5
+
+let fact_5_with_let =
+    Let("!",
+        Lambda("f",
+            Lambda("n",
+                Ef(Zero(Var "n"),
+                   Number 1,
+                   Mult(Var "n", App(App(Var "f", Var "f"), Sub1(Var "n")))))),
+        App(App(Var "!", Var "!"),Number 5))
+
+show fact_5_with_let
