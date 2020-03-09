@@ -2,7 +2,7 @@
     interp_cps.fs
 
     A continuation-passing style interpreter
-    * continuations are anonymous functions
+    * continuations are data structures
 
     This allows some interesting expressions in the language such as letcc and throw.
     Letcc grabs the current continuation and throw jumps out of the current continuation via a given continuation
@@ -26,27 +26,25 @@ type Expr =
     | Mult    of Expr * Expr
     | Zero    of Expr
     | Let     of string * Expr * Expr
-//    | Letcc   of string * Expr
-//    | Throw   of Expr * Expr
-// we aren't quite ready for these yet, as adding the continuation to the environment is a type error >.<
-// I believe data structural continuations will save the day...
+    | Letcc   of string * Expr
+    | Throw   of Expr * Expr
 
 (* Data-structural environments *)
 type Env = Map<string,Val>
 and Val =
-    | Numval  of int
-    | Boolval of bool
-    | Closure of string * Expr * Env
-and Cont =
     | EmptyK
-    | AppInnerK of Val * Cont
-    | AppOuterK of Env * Expr * Cont
-    | EfK of Expr * Expr * Env * Cont
-    | Sub1K of Cont
-    | InnerMultK of Val * Cont
-    | OuterMultK of Env * Expr * Cont
-    | ZeroK of Cont
-    | LetK of Env * string * Expr * Cont
+    | Numval     of int
+    | Boolval    of bool
+    | Closure    of string * Expr * Env
+    | AppInnerK  of Val * Val
+    | AppOuterK  of Env * Expr * Val
+    | EfK        of Expr * Expr * Env * Val
+    | Sub1K      of Val
+    | InnerMultK of Val * Val
+    | OuterMultK of Env * Expr * Val
+    | ZeroK      of Val
+    | LetK       of Env * string * Expr * Val
+    | ThrowK     of Env * Expr
 
 let empty_env = Map.empty
 
@@ -56,11 +54,21 @@ let update_env (env:Env) (x:string) (a:Val) =
 let apply_env (env:Env) (x:string) =
     env.[x]
 
-(* continuation helpers *)
+(* continuation helper *)
 let empty_k = EmptyK
+let app_inner_k rator k = AppInnerK(rator, k)
+let app_outer_k env rand k = AppOuterK(env,rand,k)
+let ef_k t f env k = EfK(t,f,env,k)
+let s1_k k = Sub1K(k)
+let inner_mult_k m k = InnerMultK(m,k)
+let outer_mult_k env n k = OuterMultK(env,n,k)
+let zero_k k = ZeroK(k)
+let let_k env x b k = LetK(env,x,b,k)
+let throw_k env vexp = ThrowK(env,vexp)
+
 
 (* the interpreter *)
-let rec valof (env:Env) (exp:Expr) (k:Cont) =
+let rec valof (env:Env) (exp:Expr) (k:Val) =
     match exp with
     | Number n          -> apply_k k (Numval n)
     | Boolean b         -> apply_k k (Boolval b)
@@ -72,10 +80,10 @@ let rec valof (env:Env) (exp:Expr) (k:Cont) =
     | Mult (m, n)       -> valof env m (outer_mult_k env n k)
     | Zero (n)          -> valof env n (zero_k k)
     | Let (x,e,b)       -> valof env e (let_k env x b k)
-//    | Letcc (x,b)       -> valof (update_env env x k) b k
-//    | Throw (kexp,vexp) -> valof env kexp (fun kval -> valof env vexp kval)
+    | Letcc (x,b)       -> valof (update_env env x k) b k
+    | Throw (kexp,vexp) -> valof env kexp (throw_k env vexp)
 
-and apply_k (k:Cont) v =
+and apply_k k v =
     match k with
     | EmptyK                -> v
     | AppInnerK(rator, k)   -> apply_closure rator v k
@@ -86,34 +94,30 @@ and apply_k (k:Cont) v =
     | OuterMultK(env,n,k)   -> valof env n (inner_mult_k v k)
     | ZeroK(k)              -> eval_zero v k
     | LetK(env,x,b,k)       -> valof (update_env env x v) b k
+    | ThrowK(env,vexp)      -> valof env vexp v
 
-and app_inner_k rator k = AppInnerK(rator, k)
-and app_outer_k env rand k = AppOuterK(env,rand,k)
-and ef_k t f env k = EfK(t,f,env,k)
-and s1_k k = Sub1K(k)
-and inner_mult_k m k = InnerMultK(m,k)
-and outer_mult_k env n k = OuterMultK(env,n,k)
-and zero_k k = ZeroK(k)
-and let_k env x b k = LetK(env,x,b,k)
-(* end of cont helpers, begin interp helpers *)
 and apply_closure (f:Val) a k =
     match f with
     | Closure (x, b, env) -> valof (update_env env x a) b k
     | _ -> raise (Oops("apply closure not given a closure as operator"))
+
 and eval_ef p t f env k =
     let q = match p with
             | Boolval b -> b
             | Numval n  -> n <> 0
-            | _         -> true   (*closures are true values*)
+            | _         -> true
     if q then (valof env t k) else (valof env f k)
+
 and eval_s1 n k =
     match n with
     | Numval n -> apply_k k (Numval (n - 1))
     | _ -> raise (Oops("sub1 was not given a number"))
+
 and eval_mult m n k =
     match (m, n) with
     | Numval m, Numval n -> apply_k k (Numval (m * n))
-    | _,_ -> raise (Oops("multiplication of two numbers"))
+    | _,_ -> raise (Oops("multiplication wasn't given two numbers"))
+
 and eval_zero n k =
     match n with
     | Numval n -> apply_k k (Boolval (n = 0))
@@ -127,6 +131,7 @@ let run_val (r:Val) =
     | Numval n          -> string n
     | Boolval b         -> string b
     | Closure (x,b,env) -> "a closure"
+    | _                 -> "a continuation"
 
 let eval (e:Expr) =
     run_val (valof empty_env e empty_k)
@@ -159,3 +164,8 @@ let fact_5_with_let =
         App(App(Var "!", Var "!"),Number 5))
 
 show fact_5_with_let
+
+let throw_1 =
+    Letcc("k", Mult(Number 3, Throw(Var "k", Number 5))) // evaluates to 5, not 15
+
+show throw_1
