@@ -1,16 +1,8 @@
 (*  Joshua Larkin
-    interp.fs
-    Small interpreter like those discussed in
-      "Essentials of Programming Languages"
-         by Dan Friedman and Mitch Wand
+    interp_cps.fs
 
-    Note: some defintions are followed by the "and" keyword
-    this is how mutual recursion is done in F#
-
-    I allow the `ef` expression to take any value as predicate,
-    with the number 0 and boolean false being the only ``false`` values.
-    I.e., closures and nonzero numbers are effectively ``true`` values.
-    This behavior is like that of the Racket programming language.
+    A continuation-passing style interpreter
+    * continuations are anonymous functions
 *)
 
 (* Basic exception to be thrown when we encounter bad data *)
@@ -45,46 +37,48 @@ let update_env (env:Env) (x:string) (a:Val) =
 let apply_env (env:Env) (x:string) =
     env.[x]
 
+(* continuation helpers *)
+let empty_k = fun x -> x
 
 (* the interpreter *)
-let rec valof (env:Env) (exp:Expr) =
+let rec valof (env:Env) (exp:Expr) k =
     match exp with
-    | Number n          -> Numval n
-    | Boolean b         -> Boolval b
-    | Var x             -> apply_env env x
-    | Lambda (x, b)     -> Closure(x,b,env)
-    | App (rator, rand) -> apply_closure (valof env rator) (valof env rand)
-    | Ef (p, t, f)      -> eval_ef (valof env p) t f env
-    | Sub1 n            -> eval_s1 (valof env n)
-    | Mult (m, n)       -> eval_mult (valof env m) (valof env n)
-    | Zero (n)          -> eval_zero (valof env n)
-    | Let (x,e,b)       -> valof (update_env env x (valof env e)) b
+    | Number n          -> k (Numval n)
+    | Boolean b         -> k (Boolval b)
+    | Var x             -> k (apply_env env x)
+    | Lambda (x, b)     -> k (Closure(x,b,env))
+    | App (rator, rand) -> valof env rator (fun rator ->  valof env rand (fun rand -> apply_closure rator rand k))
+    | Ef (p, t, f)      -> valof env p (fun p -> eval_ef p t f env k)
+    | Sub1 n            -> valof env n (fun n -> eval_s1 n k)
+    | Mult (m, n)       -> valof env m (fun m -> valof env n (fun n -> eval_mult m n k))
+    | Zero (n)          -> valof env n (fun n -> eval_zero n k)
+    | Let (x,e,b)       -> valof env e (fun v -> valof (update_env env x v) b k)
 
-and apply_closure (f:Val) a =
+and apply_closure (f:Val) a k =
     match f with
-    | Closure (x, b, env) -> valof (update_env env x a) b
+    | Closure (x, b, env) -> valof (update_env env x a) b k
     | _ -> raise (Oops("apply closure not given a closure as operator"))
 
-and eval_ef p t f env =
+and eval_ef p t f env k =
     let q = match p with
             | Boolval b -> b
             | Numval n  -> n <> 0
             | _         -> true   (*closures are true values*)
-    if q then (valof env t) else (valof env f)
+    if q then (valof env t k) else (valof env f k)
 
-and eval_s1 n =
+and eval_s1 n k =
     match n with
-    | Numval n -> Numval (n - 1)
+    | Numval n -> k (Numval (n - 1))
     | _ -> raise (Oops("sub1 was not given a number"))
 
-and eval_mult m n =
+and eval_mult m n k =
     match (m, n) with
-    | Numval m, Numval n -> Numval (m * n)
+    | Numval m, Numval n -> k (Numval (m * n))
     | _,_ -> raise (Oops("multiplication of two numbers"))
 
-and eval_zero n =
+and eval_zero n k =
     match n with
-    | Numval n -> Boolval (n = 0)
+    | Numval n -> k (Boolval (n = 0))
     | _ -> raise (Oops("zero? not given a number"))
 
 
@@ -98,7 +92,7 @@ let run_val (r:Val) =
     | Closure (x,b,env) -> "a closure"
 
 let eval (e:Expr) =
-    run_val (valof empty_env e)
+    run_val (valof empty_env e empty_k)
 
 let show (e:Expr) =
     printf "result is %s\n" (eval e)
