@@ -14,7 +14,6 @@
 (* Basic exception to be thrown when we encounter bad data *)
 exception Oops of string
 
-
 (* the target language of our interpreter *)
 type Expr =
     | Number  of int
@@ -38,6 +37,16 @@ and Val =
     | Numval  of int
     | Boolval of bool
     | Closure of string * Expr * Env
+and Cont =
+    | EmptyK
+    | AppInnerK of Val * Cont
+    | AppOuterK of Env * Expr * Cont
+    | EfK of Expr * Expr * Env * Cont
+    | Sub1K of Cont
+    | InnerMultK of Val * Cont
+    | OuterMultK of Env * Expr * Cont
+    | ZeroK of Cont
+    | LetK of Env * string * Expr * Cont
 
 let empty_env = Map.empty
 
@@ -48,10 +57,10 @@ let apply_env (env:Env) (x:string) =
     env.[x]
 
 (* continuation helpers *)
-let empty_k = fun v -> v
+let empty_k = EmptyK
 
 (* the interpreter *)
-let rec valof (env:Env) (exp:Expr) k =
+let rec valof (env:Env) (exp:Expr) (k:Cont) =
     match exp with
     | Number n          -> apply_k k (Numval n)
     | Boolean b         -> apply_k k (Boolval b)
@@ -66,24 +75,26 @@ let rec valof (env:Env) (exp:Expr) k =
 //    | Letcc (x,b)       -> valof (update_env env x k) b k
 //    | Throw (kexp,vexp) -> valof env kexp (fun kval -> valof env vexp kval)
 
-and apply_k k v =
-    k v
-and app_inner_k rator k =
-    fun v -> apply_closure rator v k
-and app_outer_k env rand k =
-    fun v ->  valof env rand (app_inner_k v k)
-and ef_k t f env k=
-    fun v -> eval_ef v t f env k
-and s1_k k =
-    fun v -> eval_s1 v k
-and inner_mult_k m k =
-    fun v -> eval_mult m v k
-and outer_mult_k env n k =
-    fun v -> valof env n (inner_mult_k v k)
-and zero_k k =
-    fun v -> eval_zero v k
-and let_k env x b k =
-    fun v -> valof (update_env env x v) b k
+and apply_k (k:Cont) v =
+    match k with
+    | EmptyK                -> v
+    | AppInnerK(rator, k)   -> apply_closure rator v k
+    | AppOuterK(env,rand,k) -> valof env rand (app_inner_k v k)
+    | EfK(t,f,env,k)        -> eval_ef v t f env k
+    | Sub1K(k)              -> eval_s1 v k
+    | InnerMultK(m,k)       -> eval_mult m v k
+    | OuterMultK(env,n,k)   -> valof env n (inner_mult_k v k)
+    | ZeroK(k)              -> eval_zero v k
+    | LetK(env,x,b,k)       -> valof (update_env env x v) b k
+
+and app_inner_k rator k = AppInnerK(rator, k)
+and app_outer_k env rand k = AppOuterK(env,rand,k)
+and ef_k t f env k = EfK(t,f,env,k)
+and s1_k k = Sub1K(k)
+and inner_mult_k m k = InnerMultK(m,k)
+and outer_mult_k env n k = OuterMultK(env,n,k)
+and zero_k k = ZeroK(k)
+and let_k env x b k = LetK(env,x,b,k)
 (* end of cont helpers, begin interp helpers *)
 and apply_closure (f:Val) a k =
     match f with
